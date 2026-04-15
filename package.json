@@ -13,6 +13,7 @@
     "dotenv": "latest",
     "express": "latest",
     "jszip": "latest",
+    "juice": "^11.1.1",
     "morgan": "latest",
     "multer": "latest",
     "node-fetch": "latest",

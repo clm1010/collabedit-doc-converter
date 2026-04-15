@@ -5,11 +5,12 @@ const UNOSERVER_URL = env.unoserverUrl
 interface ConvertOptions {
   from?: string
   to: string
+  filter?: string
   timeout?: number
 }
 
 export async function convert(fileBuffer: Buffer, options: ConvertOptions): Promise<Buffer> {
-  const { to, timeout = env.convertTimeout } = options
+  const { to, filter, timeout = env.convertTimeout } = options
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
@@ -18,6 +19,9 @@ export async function convert(fileBuffer: Buffer, options: ConvertOptions): Prom
     const formData = new FormData()
     formData.append('file', new Blob([new Uint8Array(fileBuffer)]), 'input')
     formData.append('convert-to', to)
+    if (filter) {
+      formData.append('filter', filter)
+    }
 
     const response = await fetch(`${UNOSERVER_URL}/request`, {
       method: 'POST',

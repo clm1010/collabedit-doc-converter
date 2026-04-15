@@ -1,3 +1,5 @@
+import juice from 'juice'
+
 /**
  * LO HTML → Tiptap HTML post-processing
  * Cleans up LibreOffice HTML output for Tiptap editor consumption.
@@ -5,14 +7,70 @@
 export function postProcessLoHtml(html: string): string {
   let result = html
 
+  const hadStyleBlock = /<style[^>]*>/i.test(result)
+  const styleMatch = result.match(/<style[^>]*>([\s\S]*?)<\/style>/i)
+  if (styleMatch) {
+    console.log(`[postprocess] style block sample (first 800 chars):\n${styleMatch[1].substring(0, 800)}`)
+  }
+
+  result = cleanLoDefaultCss(result)
+
+  const beforeLen = result.length
+  result = inlineCssWithJuice(result)
+  const afterLen = result.length
+  console.log(`[postprocess] juice: hadStyleBlock=${hadStyleBlock}, len ${beforeLen} → ${afterLen} (${afterLen > beforeLen ? '+' : ''}${afterLen - beforeLen})`)
+
+  const styledSpans = result.match(/<span[^>]*style="[^"]{5,}"[^>]*>/gi)
+  if (styledSpans) {
+    console.log(`[postprocess] sample styled spans after juice (first 5):`)
+    for (const el of styledSpans.slice(0, 5)) {
+      console.log(`  ${el.substring(0, 250)}`)
+    }
+  }
+
   result = stripMetaAndGeneratedStyles(result)
   result = normalizeFontSizes(result)
   result = normalizeImages(result)
   result = normalizeTableStructure(result)
   result = normalizeParagraphStyles(result)
-  result = preserveRgbaAlpha(result)
 
   return result
+}
+
+/**
+ * Clean LO's default CSS before juice inlining.
+ *
+ * LO generates two kinds of CSS rules:
+ * 1. Tag-level: p.western, h1.western etc. — LO defaults (Arial font, theme colors)
+ *    These have higher specificity (0,1,1) than document classes.
+ * 2. Class-level: .T1, .T2, .P1 etc. — actual document formatting (correct fonts/colors)
+ *    These have lower specificity (0,1,0).
+ *
+ * Because of this specificity mismatch, juice inlines the WRONG values.
+ * Fix: strip font-family, font-size, color from tag-level selectors before juice,
+ * so only document-specific class-level styles get inlined.
+ */
+function cleanLoDefaultCss(html: string): string {
+  return html.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (fullMatch, css: string) => {
+    const cleaned = css.replace(
+      /([^{}]+)\{([^}]+)\}/g,
+      (_rule, selector: string, decls: string) => {
+        const sel = selector.trim()
+        if (/^[a-z]/i.test(sel)) {
+          const filtered = decls
+            .split(';')
+            .filter(d => {
+              const prop = d.trim().toLowerCase().split(':')[0]?.trim()
+              return prop !== 'font-family' && prop !== 'font-size' && prop !== 'color'
+            })
+            .join(';')
+          return `${selector}{${filtered}}`
+        }
+        return `${selector}{${decls}}`
+      }
+    )
+    return fullMatch.replace(css, cleaned)
+  })
 }
 
 function stripMetaAndGeneratedStyles(html: string): string {
@@ -55,16 +113,6 @@ function normalizeTableStructure(html: string): string {
     return match
   })
 
-  result = result.replace(/<td([^>]*)>/gi, (match, attrs: string) => {
-    if (attrs.includes('style=') && !attrs.includes('border')) {
-      return match.replace(/style="/, 'style="border: 1px solid #d0d0d0; padding: 4px 8px; ')
-    }
-    if (!attrs.includes('style=')) {
-      return `<td${attrs} style="border: 1px solid #d0d0d0; padding: 4px 8px;">`
-    }
-    return match
-  })
-
   return result
 }
 
@@ -77,6 +125,17 @@ function normalizeParagraphStyles(html: string): string {
   })
 }
 
-function preserveRgbaAlpha(html: string): string {
-  return html
+function inlineCssWithJuice(html: string): string {
+  try {
+    return juice(html, {
+      removeStyleTags: false,
+      preserveMediaQueries: false,
+      preserveFontFaces: false,
+      applyStyleTags: true,
+      applyAttributeStyles: true
+    })
+  } catch (err) {
+    console.warn('[postprocess] juice inlining failed, skipping:', err)
+    return html
+  }
 }
