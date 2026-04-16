@@ -10,13 +10,14 @@
   },
   "dependencies": {
     "cors": "latest",
+    "docx": "^9.5.0",
     "dotenv": "latest",
     "express": "latest",
-    "jszip": "latest",
-    "juice": "^11.1.1",
+    "fast-xml-parser": "^5.0.0",
+    "fflate": "^0.8.0",
+    "image-dimensions": "^2.0.0",
     "morgan": "latest",
     "multer": "latest",
-    "node-fetch": "latest",
     "p-limit": "latest"
   },
   "devDependencies": {

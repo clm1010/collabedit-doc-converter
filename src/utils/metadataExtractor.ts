@@ -1,9 +1,8 @@
-import JSZip from 'jszip'
 import type { DocMetadata } from '../types/docMetadata.js'
+import type { DocxArchive } from '../ooxml/zipExtractor.js'
+import { parseXml, getAttr } from '../ooxml/xmlParser.js'
 
-export async function extractMetadata(docxBuffer: Buffer): Promise<DocMetadata> {
-  const zip = await JSZip.loadAsync(docxBuffer)
-
+export function extractMetadata(archive: DocxArchive): DocMetadata {
   const metadata: DocMetadata = {
     paperSize: { width: 210, height: 297 },
     margins: { top: 25.4, bottom: 25.4, left: 31.8, right: 31.8 },
@@ -19,52 +18,40 @@ export async function extractMetadata(docxBuffer: Buffer): Promise<DocMetadata> 
   }
 
   try {
-    const documentXml = await readXmlFromZip(zip, 'word/document.xml')
-    if (documentXml) {
-      parseSectionProperties(documentXml, metadata)
-    }
+    const documentXml = archive.getText('word/document.xml')
+    if (documentXml) parseSectionProperties(documentXml, metadata)
 
-    const stylesXml = await readXmlFromZip(zip, 'word/styles.xml')
-    if (stylesXml) {
-      parseDefaultStyles(stylesXml, metadata)
-    }
+    const stylesXml = archive.getText('word/styles.xml')
+    if (stylesXml) parseDefaultStyles(stylesXml, metadata)
 
-    const numberingXml = await readXmlFromZip(zip, 'word/numbering.xml')
-    if (numberingXml) {
-      metadata.numberingDefinitions = parseNumberingDefinitions(numberingXml)
-    }
+    const numberingXml = archive.getText('word/numbering.xml')
+    if (numberingXml) metadata.numberingDefinitions = parseNumberingDefinitions(numberingXml)
 
-    const headerFiles = Object.keys(zip.files).filter((f) => /^word\/header\d*\.xml$/.test(f))
+    const headerFiles = archive.listFiles('word/').filter((f) => /^word\/header\d*\.xml$/.test(f))
     for (const hf of headerFiles) {
-      const content = await readXmlFromZip(zip, hf)
+      const content = archive.getText(hf)
       if (content) {
         const key = hf.includes('1') ? 'default' : hf.includes('2') ? 'even' : 'first'
         metadata.headers[key as keyof typeof metadata.headers] = content
       }
     }
 
-    const footerFiles = Object.keys(zip.files).filter((f) => /^word\/footer\d*\.xml$/.test(f))
+    const footerFiles = archive.listFiles('word/').filter((f) => /^word\/footer\d*\.xml$/.test(f))
     for (const ff of footerFiles) {
-      const content = await readXmlFromZip(zip, ff)
+      const content = archive.getText(ff)
       if (content) {
         const key = ff.includes('1') ? 'default' : ff.includes('2') ? 'even' : 'first'
         metadata.footers[key as keyof typeof metadata.footers] = content
       }
     }
 
-    metadata.hasFootnotes = !!zip.files['word/footnotes.xml']
-    metadata.hasEndnotes = !!zip.files['word/endnotes.xml']
+    metadata.hasFootnotes = archive.getBuffer('word/footnotes.xml') !== null
+    metadata.hasEndnotes = archive.getBuffer('word/endnotes.xml') !== null
   } catch (err) {
     console.warn('Metadata extraction partially failed:', err)
   }
 
   return metadata
-}
-
-async function readXmlFromZip(zip: JSZip, path: string): Promise<string | null> {
-  const file = zip.file(path)
-  if (!file) return null
-  return file.async('text')
 }
 
 function parseSectionProperties(documentXml: string, metadata: DocMetadata) {
@@ -96,7 +83,7 @@ function parseSectionProperties(documentXml: string, metadata: DocMetadata) {
 
 function parseDefaultStyles(stylesXml: string, metadata: DocMetadata) {
   const defaultRprMatch = stylesXml.match(
-    /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:rPr>([\s\S]*?)<\/w:rPr>/
+    /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:rPr>([\s\S]*?)<\/w:rPr>/,
   )
   if (defaultRprMatch) {
     const rPr = defaultRprMatch[1]

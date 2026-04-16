@@ -1,160 +1,133 @@
-import JSZip from 'jszip'
-import { convert } from './unoClient.js'
+import { extractDocx } from '../ooxml/zipExtractor.js'
+import { parseXml, ensureArray } from '../ooxml/xmlParser.js'
+import { parseDocumentRelationships } from '../ooxml/relationships.js'
+import { resolveStyles } from '../ooxml/styleResolver.js'
+import { resolveTheme } from '../ooxml/themeResolver.js'
+import { resolveNumbering } from '../ooxml/numberingResolver.js'
+import { extractImages } from '../ooxml/imageExtractor.js'
+import { detectRedHead } from '../ooxml/redheadDetector.js'
 import { extractMetadata } from '../utils/metadataExtractor.js'
-import { postProcessLoHtml } from '../utils/htmlPostProcess.js'
-import type { ImportResult } from '../types/docMetadata.js'
+import { handleParagraph, handleTable } from '../ooxml/elementHandlers/index.js'
+import { wrapListItems } from '../ooxml/elementHandlers/list.js'
+import { checkParagraphPageBreak } from '../ooxml/elementHandlers/pageBreak.js'
+import { detectHorizontalRule } from '../ooxml/elementHandlers/horizontalRule.js'
+import type { ParseContext } from '../types/ooxml.js'
+import type { TiptapNode, TiptapDoc, ImportResponse, ImportLogs } from '../types/tiptapJson.js'
+import { createDoc, createNode } from '../types/tiptapJson.js'
 
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  bmp: 'image/bmp',
-  tiff: 'image/tiff',
-  tif: 'image/tiff',
-  svg: 'image/svg+xml',
-  emf: 'image/x-emf',
-  wmf: 'image/x-wmf',
-}
+export async function importDocx(fileBuffer: Buffer): Promise<ImportResponse> {
+  const logs: ImportLogs = { info: [], warn: [], error: [] }
+  const startTime = Date.now()
 
-function guessMimeFromBuffer(buf: Buffer): string {
-  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png'
-  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg'
-  if (buf[0] === 0x47 && buf[1] === 0x49) return 'image/gif'
-  if (buf[0] === 0x42 && buf[1] === 0x4d) return 'image/bmp'
-  return ''
-}
+  // 1. ZIP 解压
+  const archive = extractDocx(fileBuffer)
+  logs.info.push(`ZIP extracted, ${archive.listFiles().length} files`)
 
-interface ExtractedImage {
-  base64: string
-  mime: string
-  fileName: string
-}
+  // 2. 解析基础资源
+  const relationships = parseDocumentRelationships(archive)
+  const { styles, docDefaults } = resolveStyles(archive)
+  const theme = resolveTheme(archive)
+  const numbering = resolveNumbering(archive)
+  const images = extractImages(archive)
+  const metadata = extractMetadata(archive)
+  const isRedHead = detectRedHead(archive)
 
-function naturalSort(a: string, b: string): number {
-  const re = /(\d+)/g
-  const aParts = a.split(re)
-  const bParts = b.split(re)
-  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-    const ap = aParts[i] ?? ''
-    const bp = bParts[i] ?? ''
-    const an = Number(ap)
-    const bn = Number(bp)
-    if (!isNaN(an) && !isNaN(bn)) {
-      if (an !== bn) return an - bn
-    } else {
-      if (ap !== bp) return ap.localeCompare(bp)
-    }
-  }
-  return 0
-}
+  metadata.isRedHead = isRedHead
+  logs.info.push(`Styles: ${styles.size}, Images: ${images.size}, IsRedHead: ${isRedHead}`)
 
-async function extractImagesFromDocx(fileBuffer: Buffer): Promise<ExtractedImage[]> {
-  const images: ExtractedImage[] = []
-  try {
-    const zip = await JSZip.loadAsync(fileBuffer)
-    const mediaFiles = Object.keys(zip.files)
-      .filter((f) => f.startsWith('word/media/') && !zip.files[f].dir)
-      .sort((a, b) => naturalSort(a, b))
-
-    for (const filePath of mediaFiles) {
-      const file = zip.file(filePath)
-      if (!file) continue
-      const uint8 = await file.async('uint8array')
-      const base64 = Buffer.from(uint8).toString('base64')
-      const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-      const bufMime = guessMimeFromBuffer(Buffer.from(uint8.buffer, uint8.byteOffset, uint8.byteLength))
-      const mime = bufMime || MIME_BY_EXT[ext] || 'image/png'
-      const fileName = filePath.split('/').pop()!
-      images.push({ base64, mime, fileName })
-    }
-
-    console.log(`[import] Extracted ${images.length} images: ${images.map((i) => i.fileName).join(', ')}`)
-  } catch (err) {
-    console.warn('[import] Failed to extract images from DOCX:', err)
-  }
-  return images
-}
-
-function embedImagesInHtml(html: string, images: ExtractedImage[]): string {
-  if (images.length === 0) return html
-
-  const byName = new Map<string, ExtractedImage>()
-  const byBase = new Map<string, ExtractedImage>()
-  for (const img of images) {
-    byName.set(img.fileName.toLowerCase(), img)
-    byBase.set(img.fileName.replace(/\.[^.]+$/, '').toLowerCase(), img)
+  // 3. 构建解析上下文
+  const ctx: ParseContext = {
+    styles,
+    numbering,
+    relationships,
+    images,
+    theme,
+    docDefaults,
+    logs,
   }
 
-  let orderIdx = 0
-  let matched = 0
-
-  const result = html.replace(
-    /<img([^>]*)src=(["'])([^"']+)\2([^>]*)>/gi,
-    (match, before: string, quote: string, src: string, after: string) => {
-      if (src.startsWith('data:')) return match
-
-      const fileName = (src.split('/').pop() ?? '').toLowerCase()
-      const fileBase = fileName.replace(/\.[^.]+$/, '')
-
-      let img = byName.get(fileName) || byBase.get(fileBase)
-
-      if (!img) {
-        for (const [base, data] of byBase) {
-          if (fileBase.includes(base) || base.includes(fileBase)) {
-            img = data
-            break
-          }
-        }
-      }
-
-      if (!img && orderIdx < images.length) {
-        img = images[orderIdx]
-        orderIdx++
-      }
-
-      if (img) {
-        matched++
-        return `<img${before}src=${quote}data:${img.mime};base64,${img.base64}${quote}${after}>`
-      }
-
-      console.warn(`[import] Image not matched, removed: "${src}"`)
-      return ''
+  // 4. 解析 document.xml 主体
+  const documentXml = archive.getText('word/document.xml')
+  if (!documentXml) {
+    logs.error.push('word/document.xml not found')
+    return {
+      data: { content: createDoc([createNode('paragraph')]) },
+      metadata,
+      logs,
     }
+  }
+
+  const parsed = parseXml(documentXml)
+  const doc = parsed['w:document'] as Record<string, unknown> | undefined
+  const body = doc?.['w:body'] as Record<string, unknown> | undefined
+
+  if (!body) {
+    logs.error.push('w:body not found in document.xml')
+    return {
+      data: { content: createDoc([createNode('paragraph')]) },
+      metadata,
+      logs,
+    }
+  }
+
+  // 5. 遍历 body 子元素
+  // 注意：fast-xml-parser 将同标签合并为数组，段落和表格分开处理。
+  // 对于段落和表格交错的文档（如表格后还有段落），顺序可能不精确，
+  // 但大多数文档以段落为主，表格穿插，实际影响不大。
+  const nodes: TiptapNode[] = []
+
+  // 先处理段落
+  const paragraphs = ensureArray(body['w:p'] as Record<string, unknown>[])
+  for (const p of paragraphs) {
+    const pPr = p['w:pPr'] as Record<string, unknown> | undefined
+    if (pPr && checkParagraphPageBreak(pPr)) {
+      nodes.push(createNode('pageBreak'))
+    }
+
+    if (pPr) {
+      const hasContent = hasRealContent(p)
+      const hr = detectHorizontalRule(pPr, hasContent, ctx)
+      if (hr) {
+        nodes.push(hr)
+        continue
+      }
+    }
+
+    const result = handleParagraph(p, ctx)
+    if (result) {
+      if (Array.isArray(result)) nodes.push(...result)
+      else nodes.push(result)
+    }
+  }
+
+  // 再处理表格（插入到段落之后）
+  const tables = ensureArray(body['w:tbl'] as Record<string, unknown>[])
+  for (const tbl of tables) {
+    nodes.push(handleTable(tbl, ctx))
+  }
+
+  // 6. 列表后处理
+  const finalNodes = wrapListItems(nodes, ctx)
+
+  const content: TiptapDoc = createDoc(
+    finalNodes.length > 0 ? finalNodes : [createNode('paragraph')],
   )
 
-  console.log(`[import] Embedded ${matched}/${images.length} images`)
-  return result
+  const elapsed = Date.now() - startTime
+  logs.info.push(`Import completed in ${elapsed}ms, ${finalNodes.length} top-level nodes`)
+
+  return { data: { content }, metadata, logs }
 }
 
-export async function importDocx(fileBuffer: Buffer): Promise<ImportResult> {
-  console.log(`[import] Starting import, buffer size: ${fileBuffer.length}`)
-
-  const [metadata, images] = await Promise.all([
-    extractMetadata(fileBuffer),
-    extractImagesFromDocx(fileBuffer),
-  ])
-
-  let html: string
-  try {
-    const xhtmlBuffer = await convert(fileBuffer, { to: 'html', filter: 'XHTML Writer File' })
-    html = xhtmlBuffer.toString('utf-8')
-    const hasEmbeddedImages = html.includes('data:image/')
-    if (!hasEmbeddedImages && images.length > 0) {
-      throw new Error('XHTML filter did not embed images, falling back')
+function hasRealContent(p: Record<string, unknown>): boolean {
+  const runs = ensureArray(p['w:r'] as Record<string, unknown>[])
+  for (const r of runs) {
+    const texts = ensureArray(r['w:t'] as unknown[])
+    for (const t of texts) {
+      const text = typeof t === 'string' ? t : (typeof t === 'object' && t !== null ? (t as Record<string, unknown>)['#text'] as string : '')
+      if (text && text.trim().length > 0) return true
     }
-    console.log('[import] XHTML filter succeeded, images auto-embedded')
-  } catch (err) {
-    console.warn('[import] XHTML filter failed, falling back to HTML + manual embed:', err)
-    const htmlBuffer = await convert(fileBuffer, { to: 'html' })
-    html = htmlBuffer.toString('utf-8')
-    html = embedImagesInHtml(html, images)
+    if (r['w:drawing'] || r['w:pict']) return true
   }
-
-  console.log(`[import] Raw HTML length: ${html.length}`)
-
-  html = postProcessLoHtml(html)
-
-  console.log(`[import] Final HTML length: ${html.length}`)
-  return { html, metadata }
+  return false
 }

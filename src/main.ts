@@ -18,11 +18,11 @@ app.use('/export', concurrencyMiddleware, exportRouter)
 app.use('/health', healthRouter)
 
 app.get('/', (_req, res) => {
-  res.json({ service: 'collabedit-doc-converter', version: '0.1.0' })
+  res.json({ service: 'collabedit-doc-converter', version: '0.2.0' })
 })
 
 app.listen(env.port, () => {
   console.log(`[converter] Service started on port ${env.port}`)
-  console.log(`[converter] unoserver URL: ${env.unoserverUrl}`)
   console.log(`[converter] Max concurrent: ${env.maxConcurrent}`)
+  console.log(`[converter] OOXML direct parse mode (no unoserver for import)`)
 })

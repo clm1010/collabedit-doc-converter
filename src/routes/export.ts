@@ -1,90 +1,64 @@
 import { Router } from 'express'
-import multer from 'multer'
 import { exportToDocx, exportToPdf } from '../services/exportService.js'
-import { mergeExport } from '../services/mergeExportService.js'
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
-})
 
 const router = Router()
 
-router.post('/', async (req, res) => {
+router.post('/docx', async (req, res) => {
   try {
-    const { html, metadata, format } = req.body
+    const { content, metadata } = req.body
 
-    if (!html) {
-      res.status(400).json({ error: 'Missing required field: html' })
+    if (!content || typeof content !== 'object') {
+      res.status(400).json({ error: 'Missing or invalid field: content (must be a TiptapDoc JSON object)' })
+      return
+    }
+    if (content.type !== 'doc' || !Array.isArray(content.content)) {
+      res.status(400).json({ error: 'Invalid TiptapDoc: must have type="doc" and content array' })
       return
     }
 
-    if (!format || !['docx', 'pdf'].includes(format)) {
-      res.status(400).json({ error: 'Invalid format. Must be "docx" or "pdf".' })
-      return
-    }
-
-    console.log(`[export] Converting HTML (${html.length} chars) to ${format}`)
-
-    let result: { buffer: Buffer; warnings: string[] }
-
-    if (format === 'pdf') {
-      result = await exportToPdf(html, metadata)
-    } else {
-      result = await exportToDocx(html, metadata)
-    }
-
-    if (result.warnings.length > 0) {
-      console.warn('[export] Warnings:', result.warnings)
-    }
-
-    const mimeType =
-      format === 'pdf'
-        ? 'application/pdf'
-        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-
-    const ext = format === 'pdf' ? 'pdf' : 'docx'
-
-    res.setHeader('Content-Type', mimeType)
-    res.setHeader('Content-Disposition', `attachment; filename="export.${ext}"`)
-
-    if (result.warnings.length > 0) {
-      res.setHeader('X-Export-Warnings', JSON.stringify(result.warnings))
-    }
-
-    res.send(result.buffer)
-    console.log(`[export] Done. File size: ${result.buffer.length} bytes`)
-  } catch (err: any) {
-    console.error('[export] Error:', err)
-    res.status(500).json({ error: err.message || 'Export conversion failed' })
-  }
-})
-
-router.post('/merge', upload.single('originalFile'), async (req, res) => {
-  try {
-    if (!req.file) {
-      res.status(400).json({ error: 'No original file uploaded.' })
-      return
-    }
-
-    const { editedHtml, metadata } = req.body
-    if (!editedHtml) {
-      res.status(400).json({ error: 'Missing required field: editedHtml' })
-      return
-    }
-
-    const parsedMetadata = metadata ? JSON.parse(metadata) : undefined
-    const result = await mergeExport(req.file.buffer, editedHtml, parsedMetadata)
+    const start = Date.now()
+    console.log(`[export/docx] Converting Tiptap JSON to DOCX (${content.content.length} nodes)`)
+    const result = await exportToDocx(content, metadata)
+    const elapsed = Date.now() - start
 
     res.setHeader(
       'Content-Type',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     )
-    res.setHeader('Content-Disposition', 'attachment; filename="merged.docx"')
-    res.send(result)
+    res.setHeader('Content-Disposition', 'attachment; filename="export.docx"')
+    res.send(result.buffer)
+    console.log(`[export/docx] Done in ${elapsed}ms. File size: ${result.buffer.length} bytes${result.warnings.length ? ` (${result.warnings.length} warnings)` : ''}`)
   } catch (err: any) {
-    console.error('[merge-export] Error:', err)
-    res.status(500).json({ error: err.message || 'Merge export failed' })
+    console.error('[export/docx] Error:', err)
+    res.status(500).json({ error: err.message || 'DOCX export failed' })
+  }
+})
+
+router.post('/pdf', async (req, res) => {
+  try {
+    const { content, metadata } = req.body
+
+    if (!content || typeof content !== 'object') {
+      res.status(400).json({ error: 'Missing or invalid field: content (must be a TiptapDoc JSON object)' })
+      return
+    }
+    if (content.type !== 'doc' || !Array.isArray(content.content)) {
+      res.status(400).json({ error: 'Invalid TiptapDoc: must have type="doc" and content array' })
+      return
+    }
+
+    const start = Date.now()
+    console.log(`[export/pdf] Converting Tiptap JSON to PDF (${content.content.length} nodes)`)
+    const result = await exportToPdf(content, metadata)
+    const elapsed = Date.now() - start
+
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', 'attachment; filename="export.pdf"')
+    res.send(result.buffer)
+    console.log(`[export/pdf] Done in ${elapsed}ms. File size: ${result.buffer.length} bytes${result.warnings.length ? ` (${result.warnings.length} warnings)` : ''}`)
+  } catch (err: any) {
+    console.error('[export/pdf] Error:', err)
+    res.status(500).json({ error: err.message || 'PDF export failed' })
   }
 })
 

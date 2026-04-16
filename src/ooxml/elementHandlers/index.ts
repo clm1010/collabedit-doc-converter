@@ -1,0 +1,8 @@
+export { handleParagraph, processInlineContent } from './paragraph.js'
+export { handleRun, buildMarks, mergeRunProperties } from './run.js'
+export { handleTable } from './table.js'
+export { handleDrawing, handlePict, extractImagesFromRun } from './image.js'
+export { handleHyperlink } from './hyperlink.js'
+export { wrapListItems } from './list.js'
+export { checkPageBreak, checkParagraphPageBreak } from './pageBreak.js'
+export { detectHorizontalRule } from './horizontalRule.js'

@@ -25,9 +25,11 @@ router.post('/', upload.single('file'), async (req, res) => {
       return
     }
 
+    const start = Date.now()
     console.log(`[import] Processing ${req.file.originalname} (${req.file.size} bytes)`)
     const result = await importDocx(req.file.buffer)
-    console.log(`[import] Done. HTML length: ${result.html.length}`)
+    const elapsed = Date.now() - start
+    console.log(`[import] Done in ${elapsed}ms. ${result.data.content.content.length} nodes, ${result.logs.warn.length} warnings`)
 
     res.json(result)
   } catch (err: any) {

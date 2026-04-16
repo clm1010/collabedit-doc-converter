@@ -21,17 +21,12 @@ export interface DocMetadata {
   hasEndnotes: boolean
   numberingDefinitions: object[]
   customStyles: object[]
-}
-
-export interface ImportResult {
-  html: string
-  metadata: DocMetadata
+  isRedHead?: boolean
 }
 
 export interface ExportRequest {
-  html: string
+  content: import('./tiptapJson.js').TiptapDoc
   metadata?: Partial<DocMetadata>
-  format: 'docx' | 'pdf'
 }
 
 export interface HealthStatus {
