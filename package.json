@@ -15,7 +15,6 @@
     "express": "latest",
     "fast-xml-parser": "^5.0.0",
     "fflate": "^0.8.0",
-    "image-dimensions": "^2.0.0",
     "morgan": "latest",
     "multer": "latest",
     "p-limit": "latest"
