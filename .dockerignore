@@ -1,0 +1,39 @@
+# 源码与本地开发产物（镜像里用 dist/ + package.json 即可）
+src
+node_modules
+.pnpm-store
+
+# 本地开发配置
+.env
+.env.*
+!.env.example
+
+# Git 与 IDE
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+.cursor
+
+# 日志/缓存/系统文件
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+coverage
+.nyc_output
+
+# 文档与调试资源（不需要进镜像）
+*.md
+!README.md
+tmp
+debug
+testdata
+
+# scripts/ 只用来打包/离线部署，镜像内不需要
+scripts
+
+# 其他离线部署包
+*.tar

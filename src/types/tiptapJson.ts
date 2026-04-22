@@ -16,10 +16,22 @@ export interface TiptapDoc {
   content: TiptapNode[]
 }
 
+/**
+ * 脚注/尾注数据
+ */
+export interface FootnoteData {
+  id: number
+  noteType: string // 'normal' | 'separator' | 'continuationSeparator' | ...
+  content: TiptapNode[]
+}
+
+// 命名注释：前端对应类型名为 ImportResult (see collabedit-fe/src/api/converter/index.ts)
 export interface ImportResponse {
   data: { content: TiptapDoc }
   metadata: import('./docMetadata.js').DocMetadata
   logs: ImportLogs
+  footnotes?: FootnoteData[]
+  endnotes?: FootnoteData[]
 }
 
 export interface ImportLogs {

@@ -137,11 +137,16 @@ export function parseParagraphProperties(pPr: Record<string, unknown>): Paragrap
 
   const ind = pPr['w:ind'] as Record<string, unknown> | undefined
   if (ind) {
+    // start/end 是 OOXML 新名字（与 left/right 同义，Word 2016+ 常用）
     result.ind = {
-      left: numOrUndef(getAttr(ind, 'w:left')),
-      right: numOrUndef(getAttr(ind, 'w:right')),
+      left: numOrUndef(getAttr(ind, 'w:left')) ?? numOrUndef(getAttr(ind, 'w:start')),
+      right: numOrUndef(getAttr(ind, 'w:right')) ?? numOrUndef(getAttr(ind, 'w:end')),
       firstLine: numOrUndef(getAttr(ind, 'w:firstLine')),
       hanging: numOrUndef(getAttr(ind, 'w:hanging')),
+      leftChars: numOrUndef(getAttr(ind, 'w:leftChars')) ?? numOrUndef(getAttr(ind, 'w:startChars')),
+      rightChars: numOrUndef(getAttr(ind, 'w:rightChars')) ?? numOrUndef(getAttr(ind, 'w:endChars')),
+      firstLineChars: numOrUndef(getAttr(ind, 'w:firstLineChars')),
+      hangingChars: numOrUndef(getAttr(ind, 'w:hangingChars')),
     }
   }
 

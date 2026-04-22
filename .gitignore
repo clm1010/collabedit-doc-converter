@@ -46,3 +46,8 @@ lerna-debug.log*
 *.tar
 
 fonts/*
+
+# Vendor（构建时用到的第三方大文件：预下载的 Chrome for Testing zip、离线部署包等）
+# 详见 转换部署.md 和 scripts/fetch-vendor-chrome.*
+vendor/*
+!vendor/.gitkeep

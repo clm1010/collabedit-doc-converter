@@ -1,8 +1,11 @@
 import type { DocMetadata } from '../types/docMetadata.js'
 import type { DocxArchive } from '../ooxml/zipExtractor.js'
-import { parseXml, getAttr } from '../ooxml/xmlParser.js'
+import type { ImportLogs } from '../types/tiptapJson.js'
 
-export function extractMetadata(archive: DocxArchive): DocMetadata {
+export function extractMetadata(
+  archive: DocxArchive,
+  logs?: ImportLogs,
+): DocMetadata {
   const metadata: DocMetadata = {
     paperSize: { width: 210, height: 297 },
     margins: { top: 25.4, bottom: 25.4, left: 31.8, right: 31.8 },
@@ -13,6 +16,7 @@ export function extractMetadata(archive: DocxArchive): DocMetadata {
     sections: [],
     hasFootnotes: false,
     hasEndnotes: false,
+    hasComments: false,
     numberingDefinitions: [],
     customStyles: [],
   }
@@ -27,28 +31,13 @@ export function extractMetadata(archive: DocxArchive): DocMetadata {
     const numberingXml = archive.getText('word/numbering.xml')
     if (numberingXml) metadata.numberingDefinitions = parseNumberingDefinitions(numberingXml)
 
-    const headerFiles = archive.listFiles('word/').filter((f) => /^word\/header\d*\.xml$/.test(f))
-    for (const hf of headerFiles) {
-      const content = archive.getText(hf)
-      if (content) {
-        const key = hf.includes('1') ? 'default' : hf.includes('2') ? 'even' : 'first'
-        metadata.headers[key as keyof typeof metadata.headers] = content
-      }
-    }
-
-    const footerFiles = archive.listFiles('word/').filter((f) => /^word\/footer\d*\.xml$/.test(f))
-    for (const ff of footerFiles) {
-      const content = archive.getText(ff)
-      if (content) {
-        const key = ff.includes('1') ? 'default' : ff.includes('2') ? 'even' : 'first'
-        metadata.footers[key as keyof typeof metadata.footers] = content
-      }
-    }
-
     metadata.hasFootnotes = archive.getBuffer('word/footnotes.xml') !== null
     metadata.hasEndnotes = archive.getBuffer('word/endnotes.xml') !== null
+    metadata.hasComments = archive.getBuffer('word/comments.xml') !== null
   } catch (err) {
-    console.warn('Metadata extraction partially failed:', err)
+    const msg = `Metadata extraction partially failed: ${err instanceof Error ? err.message : String(err)}`
+    if (logs) logs.warn.push(msg)
+    else console.warn(msg)
   }
 
   return metadata

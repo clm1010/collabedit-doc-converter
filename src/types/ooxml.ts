@@ -25,7 +25,17 @@ export interface ParagraphProperties {
   numPr?: { numId: number; ilvl: number }
   pBdr?: Record<string, BorderDef>
   spacing?: { before?: number; after?: number; line?: number; lineRule?: string }
-  ind?: { left?: number; right?: number; firstLine?: number; hanging?: number }
+  ind?: {
+    left?: number
+    right?: number
+    firstLine?: number
+    hanging?: number
+    // 字符单位（百分之一字符），中文模板常用来表达 "首行缩进 2 字符"
+    leftChars?: number
+    rightChars?: number
+    firstLineChars?: number
+    hangingChars?: number
+  }
 }
 
 export interface RunProperties {
@@ -109,4 +119,40 @@ export interface ParseContext {
   theme: { colors: ThemeColors; fonts: ThemeFonts }
   docDefaults: { rPr: RunProperties; pPr: ParagraphProperties }
   logs: { info: string[]; warn: string[]; error: string[] }
+  /** 有序解析树根节点（document.xml），用于在 cell/inline 层获取子元素交错顺序 */
+  orderedRoot?: import('../ooxml/xmlParser.js').OrderedNode[]
+  /** 脚注上下文：id → 脚注内容 */
+  footnotes?: Map<number, import('./tiptapJson.js').TiptapNode[]>
+  endnotes?: Map<number, import('./tiptapJson.js').TiptapNode[]>
+
+  // ---- 选择性保存高保真方案：原始字节档案 + 当前部件信息（可选） ----
+  /**
+   * DOCX 原始字节档案。引入后 handler 可按需读取原始 XML 字节做字节级对齐或
+   * 图片 rels 追溯；未设置时回退到历史行为。
+   */
+  rawArchive?: import('../engine/zipExtractor.js').RawDocxArchive
+  /**
+   * 当前正在处理的部件路径（如 "word/document.xml" / "word/header2.xml"）。
+   * 由 importPipeline / headerFooterParser / footnoteParser 切换上下文时设置。
+   * image handler 借此把 `data-origin-part` 写入节点 attrs。
+   */
+  partPath?: string
+  /**
+   * 当前部件对应的顶层元素字节范围列表（按文档顺序）。
+   * orchestrator 层消费它来为每个顶层 TiptapNode 回填 __origRange/__origHash/__origPart。
+   */
+  topLevelRanges?: import('../engine/xmlRangeIndexer.js').TopLevelRange[]
+  /**
+   * SDT id → 原始 w:sdt 字节子串。一个 SDT 若含多条 tocEntry，所有 tocEntry
+   * 共享同一条记录（第一条 tocEntry 节点的 __origSdtXml 会写入该字节的 string 形式；
+   * 其余 tocEntry 的 __origSdtId 引用该条目）。
+   */
+  sdtXmlMap?: Map<string, Uint8Array>
+  /**
+   * 章节标题编号计数器。由 importPipeline 创建，按文档顺序逐个 heading
+   * 调用 `advance(numId, ilvl)` 生成 "1"、"1.2"、"1.2.1" 等前缀文本，
+   * 并写入 heading attrs.numberingText，前端编辑器据此以 ::before 显示。
+   * 仅在正文遍历时消费；页眉/页脚/脚注通常不挂章节编号，可不使用。
+   */
+  headingNumberingCounter?: import('../ooxml/headingNumberingCounter.js').HeadingNumberingCounter
 }

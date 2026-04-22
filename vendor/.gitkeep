@@ -1,0 +1,2 @@
+# 此目录用于存放构建时需要的第三方大文件，如 Chrome for Testing zip。
+# 实际内容不入 git，请使用 scripts/fetch-vendor-chrome.sh 或 .ps1 下载。

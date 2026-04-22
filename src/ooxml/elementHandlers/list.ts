@@ -39,12 +39,20 @@ export function wrapListItems(nodes: TiptapNode[], ctx: ParseContext): TiptapNod
       i++
     }
 
-    // 构建列表结构
-    const listTree = buildListTree(listItems, 0, ctx)
+    // 构建列表结构：baseLevel 取该段内最小 ilvl（见 buildListTree 的 skip 分支说明）。
+    const listTree = buildListTree(listItems, minIlvl(listItems), ctx)
     result.push(...listTree)
   }
 
   return result
+}
+
+function minIlvl(items: ListParagraph[]): number {
+  let m = items[0].ilvl
+  for (let j = 1; j < items.length; j++) {
+    if (items[j].ilvl < m) m = items[j].ilvl
+  }
+  return m
 }
 
 function buildListTree(
@@ -80,7 +88,10 @@ function buildListTree(
             i++
           }
           const subItems = items.slice(subStart, i)
-          const subTree = buildListTree(subItems, baseLevel + 1, ctx)
+          // 递归时 baseLevel 取 subItems 实际最小 ilvl，
+          // 避免跳级（如父 ilvl=3 直接嵌套 ilvl=5）时
+          // buildListTree 的 else 分支把跳级 item 丢弃。
+          const subTree = buildListTree(subItems, minIlvl(subItems), ctx)
           const lastListItem = listItemNodes[listItemNodes.length - 1]
           if (lastListItem) {
             lastListItem.content = [...(lastListItem.content ?? []), ...subTree]
@@ -91,8 +102,16 @@ function buildListTree(
       const listType = isBullet ? 'bulletList' : 'orderedList'
       result.push(createNode(listType, undefined, listItemNodes))
     } else {
-      // level > baseLevel, 跳过（由递归处理）
-      i++
+      // level > baseLevel 且此时 outer while 中还没任何 level==baseLevel 的 listItem
+      // 可以挂子树（否则就会被 inner while 的 else 分支吃掉）。
+      // 这种"段首 leading 高级别 items"直接递归成独立列表，避免 items 被整段丢掉。
+      const subStart = i
+      while (i < items.length && items[i].ilvl > baseLevel) i++
+      const subItems = items.slice(subStart, i)
+      if (subItems.length > 0) {
+        const subTree = buildListTree(subItems, minIlvl(subItems), ctx)
+        result.push(...subTree)
+      }
     }
   }
 

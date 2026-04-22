@@ -1,35 +1,27 @@
 services:
-  unoserver:
-    image: libreofficedocker/libreoffice-unoserver:3.22
-    ports:
-      - '2004:2004'
-    shm_size: '1gb'
-    environment:
-      - S6_CMD_WAIT_FOR_SERVICES_MAXTIME=300000
-    volumes:
-      - ./fonts:/usr/share/fonts/custom:ro
-    healthcheck:
-      test: ['CMD-SHELL', 'curl -so /dev/null http://localhost:2004/ || exit 1']
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 120s
-    restart: always
-
   converter:
-    build: .
+    build:
+      context: .
+      # 构建时使用宿主机网络：BuildKit 默认 bridge 到国内 Debian mirror
+      # 经常触发 TCP EOF（大包 chromium ~120MB 下载到一半被切断）。
+      # 使用 host 网络可绕过 NAT，稳定性显著提升。
+      network: host
     ports:
       - '${PORT:-3002}:${PORT:-3002}'
     environment:
-      - UNOSERVER_URL=http://unoserver:2004
       - PORT=${PORT:-3002}
-      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-50mb}
-      - CONVERT_TIMEOUT=${CONVERT_TIMEOUT:-60000}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-200mb}
       - MAX_CONCURRENT=${MAX_CONCURRENT:-5}
       - IMPORT_TIMEOUT=${IMPORT_TIMEOUT:-30000}
       - EXPORT_TIMEOUT=${EXPORT_TIMEOUT:-120000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-    depends_on:
-      unoserver:
-        condition: service_healthy
+      # CHROMIUM_EXECUTABLE_PATH 在容器中**故意留空**：
+      #   1) 避免 Windows 宿主机 .env 的 `C:\...chrome.exe` 被透传进容器导致 launch 失败；
+      #   2) 让 puppeteer 使用镜像内通过 npmmirror 下载的 Chrome for Testing（自动探测路径）。
+      - CHROMIUM_EXECUTABLE_PATH=
+      - PDF_RENDER_TIMEOUT=${PDF_RENDER_TIMEOUT:-60000}
+    volumes:
+      # 挂载自定义字体；Dockerfile 已做 fc-cache，这里做热更新覆盖
+      - ./fonts:/usr/share/fonts/custom:ro
+    # 不需要 shm_size：Puppeteer launch 参数已 --disable-dev-shm-usage 规避共享内存问题
     restart: always

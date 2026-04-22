@@ -7,14 +7,14 @@ import {
   ExternalHyperlink, ShadingType, UnderlineType,
   convertMillimetersToTwip, LevelFormat,
   VerticalAlign, HeightRule,
+  BookmarkStart, BookmarkEnd,
+  TabStopType, TabStopPosition,
 } from 'docx'
 import type { TiptapDoc, TiptapNode, TiptapMark } from '../types/tiptapJson.js'
 import type { DocMetadata } from '../types/docMetadata.js'
 
 // ═══════════════════════════════════════════════
 // Font size conversion helpers
-// Import stores as "19px" (halfPts / 2 * 1.333)
-// Export reverses: px * 1.5 ≈ half-points
 // ═══════════════════════════════════════════════
 
 function pxToHalfPoints(raw: string | number): number | undefined {
@@ -33,7 +33,6 @@ function parsePixel(val: unknown): number | undefined {
   return undefined
 }
 
-/** px → twips (1 px ≈ 15 twips at 96 dpi) */
 function pxToTwips(px: number): number {
   return Math.round(px * 15)
 }
@@ -86,10 +85,6 @@ function marksToRunOptions(marks?: TiptapMark[]): Record<string, unknown> {
   return opts
 }
 
-// ═══════════════════════════════════════════════
-// Alignment helper
-// ═══════════════════════════════════════════════
-
 function toAlignment(val?: unknown): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
   switch (val) {
     case 'left': return AlignmentType.LEFT
@@ -139,6 +134,18 @@ function convertInlineContent(
       case 'hardBreak':
         result.push(new TextRun({ break: 1 }))
         break
+      case 'pageBreak':
+        // 行内场景 pageBreak → 页分隔
+        result.push(new TextRun({ children: [new PageBreak()] } as any))
+        break
+      case 'tocEntry': {
+        // 内联形式的 tocEntry（极少见，走文字 + 制表位 + 页码布局）
+        const text = String(node.attrs?.text || '')
+        const page = String(node.attrs?.pageNumber || '')
+        result.push(new TextRun({ text }))
+        if (page) result.push(new TextRun({ text: `\t${page}` }))
+        break
+      }
       default:
         warnings.push(`Unknown inline node: ${node.type}`)
     }
@@ -179,13 +186,37 @@ function makeImageRun(node: TiptapNode, warnings: string[]): ImageRun | null {
 // Paragraph & Heading
 // ═══════════════════════════════════════════════
 
+let bookmarkIdSeq = 0
+function nextBookmarkId(): number {
+  return ++bookmarkIdSeq
+}
+
 function convertParagraph(
   node: TiptapNode,
   extraOpts: Record<string, unknown> | undefined,
   warnings: string[],
 ): Paragraph {
   const align = toAlignment(node.attrs?.textAlign)
-  const children = convertInlineContent(node.content, warnings)
+  const inlineChildren = convertInlineContent(node.content, warnings)
+
+  // bookmarks 支持：将 bookmarkStart/End 包裹 children
+  const bookmarks = node.attrs?.bookmarks
+  let children: unknown[] = inlineChildren
+  if (Array.isArray(bookmarks) && bookmarks.length > 0) {
+    const wrapped: unknown[] = []
+    for (const name of bookmarks) {
+      if (typeof name === 'string') {
+        wrapped.push(new BookmarkStart(name, nextBookmarkId()))
+      }
+    }
+    wrapped.push(...inlineChildren)
+    for (const name of bookmarks) {
+      if (typeof name === 'string') {
+        wrapped.push(new BookmarkEnd(nextBookmarkId()))
+      }
+    }
+    children = wrapped
+  }
 
   const opts: Record<string, unknown> = { children }
   if (align) opts.alignment = align
@@ -210,6 +241,44 @@ function convertHeading(node: TiptapNode, warnings: string[]): Paragraph {
     { heading: HEADING_MAP[level] || HeadingLevel.HEADING_1 },
     warnings,
   )
+}
+
+// ═══════════════════════════════════════════════
+// TocEntry
+// ═══════════════════════════════════════════════
+
+/**
+ * tocEntry 节点导出
+ * 方案：使用制表位对齐生成 "文字....页码" 样式
+ * 如果有 rawXml 则优先还原（当前简化：总是重新生成）
+ */
+function convertTocEntry(node: TiptapNode): Paragraph {
+  const text = String(node.attrs?.text || '')
+  const page = String(node.attrs?.pageNumber || '')
+  const level = Math.max(1, Math.min(9, Number(node.attrs?.level || 1)))
+  const href = node.attrs?.href ? String(node.attrs.href) : undefined
+
+  const indent = 400 * (level - 1)
+  const runs: TextRun[] = []
+  runs.push(new TextRun({ text }))
+  if (page) {
+    runs.push(new TextRun({ text: `\t${page}` }))
+  }
+
+  const children: unknown[] = runs
+  if (href && href.startsWith('#')) {
+    const anchor = href.slice(1)
+    // 简化：忽略 internal hyperlink，正文直接输出文本
+    void anchor
+  }
+
+  return new Paragraph({
+    children,
+    indent: indent ? { left: indent } : undefined,
+    tabStops: [
+      { type: TabStopType.RIGHT, position: TabStopPosition.MAX, leader: 'dot' as any },
+    ],
+  } as any)
 }
 
 // ═══════════════════════════════════════════════
@@ -282,7 +351,7 @@ function convertTable(node: TiptapNode, warnings: string[]): Table {
 }
 
 // ═══════════════════════════════════════════════
-// Lists (flatten to paragraphs with numbering ref)
+// Lists
 // ═══════════════════════════════════════════════
 
 function convertList(
@@ -356,7 +425,7 @@ function convertBlockquote(
 // Code Block
 // ═══════════════════════════════════════════════
 
-function convertCodeBlock(node: TiptapNode, warnings: string[]): Paragraph {
+function convertCodeBlock(node: TiptapNode, _warnings: string[]): Paragraph {
   const text = (node.content || [])
     .filter(c => c.type === 'text')
     .map(c => c.text || '')
@@ -412,6 +481,9 @@ function convertBlockNodes(
       case 'codeBlock':
         result.push(convertCodeBlock(node, warnings))
         break
+      case 'tocEntry':
+        result.push(convertTocEntry(node))
+        break
       case 'image': {
         const imgRun = makeImageRun(node, warnings)
         if (imgRun) {
@@ -432,7 +504,7 @@ function convertBlockNodes(
 }
 
 // ═══════════════════════════════════════════════
-// Numbering definitions (bullet + ordered)
+// Numbering definitions
 // ═══════════════════════════════════════════════
 
 const BULLET_CHARS = ['\u2022', '\u25CB', '\u25AA']
@@ -483,11 +555,23 @@ function buildNumberingConfig() {
 // Header / Footer helpers
 // ═══════════════════════════════════════════════
 
-function textToHeaderChildren(htmlOrText?: string): Paragraph[] {
-  if (!htmlOrText) return []
-  const text = htmlOrText.replace(/<[^>]*>/g, '').trim()
-  if (!text) return []
-  return [new Paragraph({ children: [new TextRun({ text })] })]
+/**
+ * 将 header/footer 值转换为 Paragraph[]（支持新旧两种格式）
+ * - 新：TiptapNode[]（富内容） → convertBlockNodes
+ * - 旧：string（HTML 字符串） → 简单去标签兜底
+ */
+function headerFooterToChildren(
+  val: TiptapNode[] | string | undefined,
+  warnings: string[],
+): Paragraph[] {
+  if (!val) return []
+  if (typeof val === 'string') {
+    const text = val.replace(/<[^>]*>/g, '').trim()
+    if (!text) return []
+    return [new Paragraph({ children: [new TextRun({ text })] })]
+  }
+  const blocks = convertBlockNodes(val, 0, warnings)
+  return blocks.filter((b): b is Paragraph => b instanceof Paragraph)
 }
 
 // ═══════════════════════════════════════════════
@@ -498,7 +582,12 @@ export async function jsonToDocx(
   doc: TiptapDoc,
   metadata?: Partial<DocMetadata>,
 ): Promise<{ buffer: Buffer; warnings: string[] }> {
+  bookmarkIdSeq = 0
   const warnings: string[] = []
+
+  // 收集 footnotes/endnotes（从 TiptapDoc 本身未携带，仅来源于 metadata 附带）
+  // 此处本版不对 footnotes 做完整还原，仅保留字段
+  const footnotes: Record<number, { children: Paragraph[] }> = {}
 
   const children = convertBlockNodes(doc.content || [], 0, warnings)
   if (children.length === 0) children.push(new Paragraph({}))
@@ -526,23 +615,55 @@ export async function jsonToDocx(
   const headers: Record<string, Header> = {}
   const footers: Record<string, Footer> = {}
 
-  if (metadata?.headers?.default) {
-    headers.default = new Header({ children: textToHeaderChildren(metadata.headers.default) })
+  const h = metadata?.headers
+  const f = metadata?.footers
+
+  if (h?.default) {
+    headers.default = new Header({ children: headerFooterToChildren(h.default, warnings) })
   }
-  if (metadata?.headers?.first) {
-    headers.first = new Header({ children: textToHeaderChildren(metadata.headers.first) })
+  if (h?.first) {
+    headers.first = new Header({ children: headerFooterToChildren(h.first, warnings) })
   }
-  if (metadata?.headers?.even) {
-    headers.even = new Header({ children: textToHeaderChildren(metadata.headers.even) })
+  if (h?.even) {
+    headers.even = new Header({ children: headerFooterToChildren(h.even, warnings) })
   }
-  if (metadata?.footers?.default) {
-    footers.default = new Footer({ children: textToHeaderChildren(metadata.footers.default) })
+  if (f?.default) {
+    footers.default = new Footer({ children: headerFooterToChildren(f.default, warnings) })
   }
-  if (metadata?.footers?.first) {
-    footers.first = new Footer({ children: textToHeaderChildren(metadata.footers.first) })
+  if (f?.first) {
+    footers.first = new Footer({ children: headerFooterToChildren(f.first, warnings) })
   }
-  if (metadata?.footers?.even) {
-    footers.even = new Footer({ children: textToHeaderChildren(metadata.footers.even) })
+  if (f?.even) {
+    footers.even = new Footer({ children: headerFooterToChildren(f.even, warnings) })
+  }
+
+  // 多节属性：此版仅应用全局 section 的 page 设置 + 首节 headerRefs/footerRefs
+  // 若后续要支持真正多节，需要在 convertBlockNodes 中插入 section 分隔
+  if (metadata?.sections && metadata.sections.length > 0) {
+    const first = metadata.sections[0]
+    if (first.pageSetup) {
+      const ps = first.pageSetup
+      const page: Record<string, unknown> = (sectionProps.page as Record<string, unknown>) ?? {}
+      if (ps.width && ps.height) {
+        page.size = {
+          width: convertMillimetersToTwip(ps.width),
+          height: convertMillimetersToTwip(ps.height),
+          orientation: ps.orientation,
+        }
+      }
+      if (ps.margins) {
+        page.margin = {
+          top: ps.margins.top != null ? convertMillimetersToTwip(ps.margins.top) : undefined,
+          bottom: ps.margins.bottom != null ? convertMillimetersToTwip(ps.margins.bottom) : undefined,
+          left: ps.margins.left != null ? convertMillimetersToTwip(ps.margins.left) : undefined,
+          right: ps.margins.right != null ? convertMillimetersToTwip(ps.margins.right) : undefined,
+        }
+      }
+      sectionProps.page = page
+    }
+    if (first.titlePg) {
+      sectionProps.titlePage = true
+    }
   }
 
   const section: Record<string, unknown> = {
@@ -552,10 +673,15 @@ export async function jsonToDocx(
   if (Object.keys(headers).length > 0) section.headers = headers
   if (Object.keys(footers).length > 0) section.footers = footers
 
-  const document = new Document({
+  const documentOpts: Record<string, unknown> = {
     numbering: buildNumberingConfig() as any,
     sections: [section as any],
-  })
+  }
+  if (Object.keys(footnotes).length > 0) {
+    documentOpts.footnotes = footnotes
+  }
+
+  const document = new Document(documentOpts as any)
 
   const arrayBuffer = await Packer.toBuffer(document)
   return { buffer: Buffer.from(arrayBuffer), warnings }

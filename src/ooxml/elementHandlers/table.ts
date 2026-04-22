@@ -3,6 +3,7 @@ import type { ParseContext } from '../../types/ooxml.js'
 import { createNode } from '../../types/tiptapJson.js'
 import { ensureArray, getAttr, getWVal } from '../xmlParser.js'
 import { handleParagraph } from './paragraph.js'
+import { wrapListItems } from './list.js'
 
 /** twips → px */
 function twipsToPx(twips: number): number {
@@ -207,22 +208,56 @@ function processCellContent(
   const content: TiptapNode[] = []
 
   const paragraphs = ensureArray(tc['w:p'] as Record<string, unknown>[])
-  for (const p of paragraphs) {
-    const result = handleParagraph(p, ctx)
-    if (result) {
-      if (Array.isArray(result)) {
-        content.push(...result)
-      } else {
-        content.push(result)
+  const tables = ensureArray(tc['w:tbl'] as Record<string, unknown>[])
+
+  // 简化：先段落后嵌套表格（与原实现一致）；
+  // 理想情况下应使用 orderedRoot 定位单元格并按原始顺序遍历。
+  // 由于 ProseMirror table schema 多数场景接受混合块级节点，
+  // 顺序误差对最常见文档影响较小，但为提升保真度仍保留扩展入口。
+  const orderedCellChildren = findCellOrderedChildren(tc, ctx)
+  if (orderedCellChildren) {
+    let pIdx = 0, tblIdx = 0
+    for (const tag of orderedCellChildren) {
+      if (tag === 'w:p') {
+        const p = paragraphs[pIdx++]
+        if (!p) continue
+        const result = handleParagraph(p, ctx)
+        if (result) {
+          if (Array.isArray(result)) content.push(...result)
+          else content.push(result)
+        }
+      } else if (tag === 'w:tbl') {
+        const tbl = tables[tblIdx++]
+        if (!tbl) continue
+        content.push(handleTable(tbl, ctx))
       }
+    }
+  } else {
+    for (const p of paragraphs) {
+      const result = handleParagraph(p, ctx)
+      if (result) {
+        if (Array.isArray(result)) content.push(...result)
+        else content.push(result)
+      }
+    }
+    for (const tbl of tables) {
+      content.push(handleTable(tbl, ctx))
     }
   }
 
-  // 嵌套表格
-  const tables = ensureArray(tc['w:tbl'] as Record<string, unknown>[])
-  for (const tbl of tables) {
-    content.push(handleTable(tbl, ctx))
-  }
+  // B6: 单元格内列表包装
+  return wrapListItems(content, ctx)
+}
 
-  return content
+/**
+ * 基于 ctx.orderedRoot 遍历定位当前 cell 的子元素标签序列（仅返回 w:p/w:tbl 顺序）
+ * 这里采用近似做法：通过 cell 对象引用相等比较无法实现；
+ * 简化为返回 undefined，让上层退回到 "先 p 后 tbl" 模式。
+ * TODO: 若需精确顺序可改为携带"路径索引"从 orderedRoot 定位。
+ */
+function findCellOrderedChildren(
+  _tc: Record<string, unknown>,
+  _ctx: ParseContext,
+): string[] | null {
+  return null
 }
