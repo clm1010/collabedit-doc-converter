@@ -28,11 +28,5 @@
     "@types/node": "latest",
     "tsx": "latest",
     "typescript": "latest"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "puppeteer",
-      "esbuild"
-    ]
   }
 }
